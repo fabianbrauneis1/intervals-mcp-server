@@ -133,20 +133,111 @@ __all__ = [
 
 # von Claude
 import os
+import time
+import secrets
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse, RedirectResponse
 
-# Kleine FastAPI-Hülle nur für den Health-Check,
-# der eigentliche MCP-Traffic läuft über mcp.sse_app()
 app = FastAPI(title="Intervals.icu MCP Server Remote")
+
+# ---- In-memory "Datenbank" für den OAuth-Stub ----
+# Reicht für Single-User-Betrieb völlig aus
+_clients: dict[str, dict] = {}
+_auth_codes: dict[str, dict] = {}
+_tokens: set[str] = set()
+
+BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://intervals-mcp-server-production-d65b.up.railway.app")
+
 
 @app.get("/health")
 async def health():
     return {"status": "ok", "message": "Intervals.icu MCP Server is running"}
 
-# FastMCP liefert bereits eine fertige, korrekte SSE-App
-# (mit /sse und /messages Endpoints) - hier mounten wir sie
+
+# 1. Claude fragt hier nach, wie die Anmeldung funktioniert
+@app.get("/.well-known/oauth-authorization-server")
+async def oauth_metadata():
+    return JSONResponse({
+        "issuer": BASE_URL,
+        "authorization_endpoint": f"{BASE_URL}/authorize",
+        "token_endpoint": f"{BASE_URL}/token",
+        "registration_endpoint": f"{BASE_URL}/register",
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code"],
+        "code_challenge_methods_supported": ["S256", "plain"],
+        "token_endpoint_auth_methods_supported": ["none", "client_secret_post"],
+    })
+
+
+@app.get("/.well-known/oauth-protected-resource")
+async def protected_resource_metadata():
+    return JSONResponse({
+        "resource": BASE_URL,
+        "authorization_servers": [BASE_URL],
+    })
+
+
+# 2. Claude registriert sich selbst als Client
+@app.post("/register")
+async def register(request: Request):
+    body = await request.json()
+    client_id = secrets.token_hex(16)
+    _clients[client_id] = {
+        "redirect_uris": body.get("redirect_uris", []),
+        "client_name": body.get("client_name", "claude"),
+    }
+    return JSONResponse({
+        "client_id": client_id,
+        "redirect_uris": body.get("redirect_uris", []),
+        "client_name": body.get("client_name", "claude"),
+        "token_endpoint_auth_method": "none",
+        "grant_types": ["authorization_code"],
+        "response_types": ["code"],
+    })
+
+
+# 3. "Login"-Schritt - hier winken wir automatisch durch, da nur du der Nutzer bist
+@app.get("/authorize")
+async def authorize(
+    client_id: str,
+    redirect_uri: str,
+    state: str = "",
+    code_challenge: str = "",
+    code_challenge_method: str = "",
+):
+    code = secrets.token_hex(16)
+    _auth_codes[code] = {
+        "client_id": client_id,
+        "code_challenge": code_challenge,
+        "code_challenge_method": code_challenge_method,
+        "created": time.time(),
+    }
+    sep = "&" if "?" in redirect_uri else "?"
+    return RedirectResponse(f"{redirect_uri}{sep}code={code}&state={state}")
+
+
+# 4. Claude tauscht den Code gegen ein Access Token
+@app.post("/token")
+async def token(request: Request):
+    form = await request.form()
+    code = form.get("code")
+    entry = _auth_codes.pop(code, None)
+    if entry is None:
+        return JSONResponse({"error": "invalid_grant"}, status_code=400)
+
+    access_token = secrets.token_hex(32)
+    _tokens.add(access_token)
+    return JSONResponse({
+        "access_token": access_token,
+        "token_type": "bearer",
+        "expires_in": 31536000,  # 1 Jahr, damit du nicht ständig neu verbinden musst
+    })
+
+
+# MCP-Traffic selbst - FastMCP übernimmt SSE korrekt
 app.mount("/", mcp.sse_app())
+
 
 if __name__ == "__main__":
     validate_athlete_id(config.athlete_id)
