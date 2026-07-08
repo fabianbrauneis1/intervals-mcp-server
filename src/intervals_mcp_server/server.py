@@ -131,43 +131,25 @@ __all__ = [
 #    selected_transport = setup_transport()
 #    start_server(mcp, selected_transport)
 
-# von Gemini
+# von Claude
 import os
-from fastapi import FastAPI, Response
-from mcp.server.sse import SseServerTransport
+import uvicorn
+from fastapi import FastAPI
 
-# 1. Erstelle die FastAPI-App
+# Kleine FastAPI-Hülle nur für den Health-Check,
+# der eigentliche MCP-Traffic läuft über mcp.sse_app()
 app = FastAPI(title="Intervals.icu MCP Server Remote")
 
-# 2. Initialisiere den SSE-Transport
-sse_transport = SseServerTransport("/messages")
-
-# NEU: Root-Route für den Online-Connector (Health-Check für claude.ai)
-@app.get("/")
-async def root():
+@app.get("/health")
+async def health():
     return {"status": "ok", "message": "Intervals.icu MCP Server is running"}
 
-# 3. Definiere die Web-Routen für Claude Online
-@app.get("/sse")
-async def handle_sse():
-    async with sse_transport.connect_consumers() as queue:
-        # Reicht den Stream an den Handler weiter
-        return await sse_transport.handle_sse_request(mcp, queue)
+# FastMCP liefert bereits eine fertige, korrekte SSE-App
+# (mit /sse und /messages Endpoints) - hier mounten wir sie
+app.mount("/", mcp.sse_app())
 
-@app.post("/messages")
-async def handle_messages():
-    return await sse_transport.handle_post_request(mcp)
-
-# Run the server
 if __name__ == "__main__":
-    # Validate ATHLETE_ID when server starts
     validate_athlete_id(config.athlete_id)
-
-    # Hier wechseln wir von stdio auf den Uvicorn Webserver für Railway
-    import uvicorn
-    
-    # Railway übergibt den Port dynamisch über diese Umgebungsvariable
     port = int(os.environ.get("PORT", 8000))
-    
-    logger.info(f"Starte Remote-Mcp-Server auf Port {port} via SSE...")
+    logger.info(f"Starte Remote-MCP-Server auf Port {port} via SSE...")
     uvicorn.run(app, host="0.0.0.0", port=port)
