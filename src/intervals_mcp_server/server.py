@@ -123,10 +123,48 @@ __all__ = [
 
 
 # Run the server
+#if __name__ == "__main__":
+#    # Validate ATHLETE_ID when server starts (not at import time to allow tests)
+#    validate_athlete_id(config.athlete_id)
+#
+#    # Setup transport and start server
+#    selected_transport = setup_transport()
+#    start_server(mcp, selected_transport)
+
+# von Gemini
+import os
+from fastapi import FastAPI
+from mcp.server.sse import SseServerTransport
+
+# 1. Erstelle die FastAPI-App
+app = FastAPI(title="Intervals.icu MCP Server Remote")
+
+# 2. Initialisiere den SSE-Transport von MCP mit der mcp-Instanz aus dem Repo
+# Der Server benötigt einen Endpunkt, an den Claude später POST-Anfragen schickt
+sse_transport = SseServerTransport(endpoint_to_parse_as_url="/messages")
+
+# 3. Definiere die Web-Routen für Claude Desktop
+@app.get("/sse")
+async def handle_sse():
+    async with sse_transport.connect_consumers() as queue:
+        # Öffnet den permanenten Event-Stream zu Claude
+        return await sse_transport.handle_sse_request(queue)
+
+@app.post("/messages")
+async def handle_messages():
+    # Verarbeitet die Nachrichten (Tool-Aufrufe), die von Claude gesendet werden
+    return await sse_transport.handle_post_request()
+
+# Run the server
 if __name__ == "__main__":
-    # Validate ATHLETE_ID when server starts (not at import time to allow tests)
+    # Validate ATHLETE_ID when server starts
     validate_athlete_id(config.athlete_id)
 
-    # Setup transport and start server
-    selected_transport = setup_transport()
-    start_server(mcp, selected_transport)
+    # Hier wechseln wir von stdio auf den Uvicorn Webserver für Railway
+    import uvicorn
+    
+    # Railway übergibt den Port dynamisch über diese Umgebungsvariable
+    port = int(os.environ.get("PORT", 8000))
+    
+    logger.info(f"Starte Remote-Mcp-Server auf Port {port} via SSE...")
+    uvicorn.run(app, host="0.0.0.0", port=port)
