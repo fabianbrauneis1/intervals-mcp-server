@@ -139,9 +139,8 @@ from mcp.server.sse import SseServerTransport
 # 1. Erstelle die FastAPI-App
 app = FastAPI(title="Intervals.icu MCP Server Remote")
 
-# 2. Initialisiere den SSE-Transport von MCP mit der mcp-Instanz aus dem Repo
-# Der Server benötigt einen Endpunkt, an den Claude später POST-Anfragen schickt
-sse_transport = SseServerTransport(endpoint_to_parse_as_url="/messages")
+# 2. Initialisiere den SSE-Transport von MCP
+sse_transport = SseServerTransport("/messages")
 
 # 3. Definiere die Web-Routen für Claude Desktop
 @app.get("/sse")
