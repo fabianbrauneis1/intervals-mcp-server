@@ -133,26 +133,30 @@ __all__ = [
 
 # von Gemini
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from mcp.server.sse import SseServerTransport
 
 # 1. Erstelle die FastAPI-App
 app = FastAPI(title="Intervals.icu MCP Server Remote")
 
-# 2. Initialisiere den SSE-Transport von MCP
+# 2. Initialisiere den SSE-Transport
 sse_transport = SseServerTransport("/messages")
 
-# 3. Definiere die Web-Routen für Claude Desktop
+# NEU: Root-Route für den Online-Connector (Health-Check für claude.ai)
+@app.get("/")
+async def root():
+    return {"status": "ok", "message": "Intervals.icu MCP Server is running"}
+
+# 3. Definiere die Web-Routen für Claude Online
 @app.get("/sse")
 async def handle_sse():
     async with sse_transport.connect_consumers() as queue:
-        # Öffnet den permanenten Event-Stream zu Claude
-        return await sse_transport.handle_sse_request(queue)
+        # Reicht den Stream an den Handler weiter
+        return await sse_transport.handle_sse_request(mcp, queue)
 
 @app.post("/messages")
 async def handle_messages():
-    # Verarbeitet die Nachrichten (Tool-Aufrufe), die von Claude gesendet werden
-    return await sse_transport.handle_post_request()
+    return await sse_transport.handle_post_request(mcp)
 
 # Run the server
 if __name__ == "__main__":
